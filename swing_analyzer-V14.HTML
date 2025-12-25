@@ -1,0 +1,213 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+    <meta charset="UTF-8">
+    <title>阿公打擊機制 14.0 - 全能影像精算版</title>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/pose"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/drawing_utils"></script>
+    <style>
+        :root { --bg: #020617; --card: #0f172a; --accent: #f59e0b; --text: #f8fafc; --bar-bg: #1e293b; --danger: #ef4444; }
+        body { font-family: 'PingFang TC', sans-serif; background: var(--bg); color: var(--text); margin: 0; padding: 20px; }
+        .container { display: grid; grid-template-columns: 1.4fr 1fr; gap: 20px; max-width: 1600px; margin: 0 auto; }
+        .video-side { position: relative; background: #000; border-radius: 12px; border: 1px solid #334155; overflow: hidden; box-shadow: 0 10px 30px rgba(0,0,0,0.6); }
+        video, canvas { width: 100%; height: auto; display: block; }
+        .dashboard { display: flex; flex-direction: column; gap: 10px; }
+        .hero-box { background: linear-gradient(135deg, #1e293b, #020617); border: 2px solid var(--accent); border-radius: 16px; padding: 20px; text-align: center; }
+        #total-score { font-size: 6rem; font-weight: 900; color: var(--accent); margin: 0; line-height: 1; }
+        .section-label { font-size: 0.8rem; font-weight: bold; color: #94a3b8; margin: 12px 0 4px; display: flex; justify-content: space-between; border-left: 3px solid var(--accent); padding-left: 8px; }
+        .score-item { background: var(--card); padding: 12px; border-radius: 8px; border: 1px solid #1e293b; transition: 0.3s; }
+        .score-item.perfect { border-color: var(--accent); box-shadow: 0 0 10px rgba(245, 158, 11, 0.2); }
+        .score-info { display: flex; justify-content: space-between; margin-bottom: 6px; font-size: 0.9rem; font-weight: 600; }
+        .score-bar-bg { height: 6px; background: var(--bar-bg); border-radius: 3px; overflow: hidden; }
+        .score-bar-fill { height: 100%; width: 0%; background: var(--accent); transition: width 0.4s cubic-bezier(0.175, 0.885, 0.32, 1.275); }
+        .btn-up { background: var(--accent); color: #000; padding: 10px 20px; border-radius: 8px; font-weight: 900; cursor: pointer; display: inline-block; }
+        .status-ui { position: absolute; top: 15px; left: 15px; background: rgba(0,0,0,0.8); padding: 6px 12px; border-radius: 4px; border: 1px solid var(--accent); color: var(--accent); font-size: 0.75rem; font-weight: bold; }
+    </style>
+</head>
+<body>
+
+<div class="container">
+    <div class="visual">
+        <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:10px;">
+            <h2 style="margin:0;">阿公打擊機制檢測 <span style="color:var(--accent)">14.0 精算加嚴版</span></h2>
+            <label class="btn-up" for="v-file">載入 iPhone 影片</label>
+            <input type="file" id="v-file" accept="video/*" style="display:none">
+        </div>
+        <div class="video-side">
+            <video id="vid" playsinline muted></video>
+            <canvas id="cvs"></canvas>
+            <div id="side-tag" class="status-ui">等待影像輸入...</div>
+        </div>
+    </div>
+
+    <div class="dashboard">
+        <div class="hero-box">
+            <div style="font-size: 0.85rem; color: #94a3b8; letter-spacing: 1px;">阿公打擊機制總評</div>
+            <div id="total-score">0</div>
+            <div style="display:flex; justify-content:space-around; margin-top:10px; font-size: 0.85rem;">
+                <span>機制嚴選 (70%): <b id="sum-m" style="color:var(--accent)">0</b></span>
+                <span>骨架樣態 (30%): <b id="sum-s" style="color:var(--accent)">0</b></span>
+            </div>
+        </div>
+
+        <div class="section-label"><span>機制時序 (70分) - 加嚴版</span><span>時序精算</span></div>
+        <div class="score-item" id="card-m1"><div class="score-info"><span>1+2. 蓄力手導引 (V字水平)</span><span id="txt-m1">0/25</span></div>
+            <div class="score-bar-bg"><div id="bar-m1" class="score-bar-fill"></div></div></div>
+        <div class="score-item" id="card-m2"><div class="score-info"><span>3+4. 旋轉貼身 (垂直引導)</span><span id="txt-m2">0/25</span></div>
+            <div class="score-bar-bg"><div id="bar-m2" class="score-bar-fill"></div></div></div>
+        <div class="score-item" id="card-m3"><div class="score-info"><span>5+6. 能量釋放 (前髖後轉)</span><span id="txt-m3">0/20</span></div>
+            <div class="score-bar-bg"><div id="bar-m3" class="score-bar-fill"></div></div></div>
+
+        <div class="section-label"><span>樣態指標 (30分) - 個別顯示</span><span>骨架結構</span></div>
+        <div class="score-item" id="card-s1"><div class="score-info"><span>A. 著地瞬中軸位置</span><span id="txt-s1">0/7.5</span></div>
+            <div class="score-bar-bg"><div id="bar-s1" class="score-bar-fill"></div></div></div>
+        <div class="score-item" id="card-s2"><div class="score-info"><span>B. 手比球前肩臂平行度</span><span id="txt-s2">0/7.5</span></div>
+            <div class="score-bar-bg"><div id="bar-s2" class="score-bar-fill"></div></div></div>
+        <div class="score-item" id="card-s3"><div class="score-info"><span>C. 擊球瞬間三點一線</span><span id="txt-s3">0/7.5</span></div>
+            <div class="score-bar-bg"><div id="bar-s3" class="score-bar-fill"></div></div></div>
+        <div class="score-item" id="card-s4"><div class="score-info"><span>D. 揮擊延伸球棒角度</span><span id="txt-s4">0/7.5</span></div>
+            <div class="score-bar-bg"><div id="bar-s4" class="score-bar-fill"></div></div></div>
+    </div>
+</div>
+
+<script>
+    const vid = document.getElementById('vid');
+    const cvs = document.getElementById('cvs');
+    const ctx = cvs.getContext('2d');
+    const sideTag = document.getElementById('side-tag');
+
+    let smLM = null;
+    let ALPHA = 0.6; // 一般影片提高靈敏度，慢動作則自動調低
+    let stance = "UNKNOWN";
+    let scores = { m1:0, m2:0, m3:0, s1:0, s2:0, s3:0, s4:0 };
+    let marks = { heel: false, v: false, imp: false };
+
+    const pose = new Pose({ locateFile: (f) => `https://cdn.jsdelivr.net/npm/@mediapipe/pose/${f}` });
+    pose.setOptions({ modelComplexity: 1, smoothLandmarks: true, minDetectionConfidence: 0.65, minTrackingConfidence: 0.65 });
+
+    function getA(p1, p2, p3) {
+        const r = Math.atan2(p3.y-p2.y, p3.x-p2.x) - Math.atan2(p1.y-p2.y, p1.x-p2.x);
+        let a = Math.abs(r * 180 / Math.PI);
+        return a > 180 ? 360 - a : a;
+    }
+
+    // 14.0 加嚴版比例函數：使用平方根曲線，讓分數在不完美時掉得更快
+    function calcStrict(val, target, tolerance, maxScore) {
+        let diff = Math.abs(val - target);
+        if (diff > tolerance) return 0;
+        let ratio = Math.pow(1 - (diff / tolerance), 1.2); // 提高指數，讓加嚴有感
+        return ratio * maxScore;
+    }
+
+    pose.onResults((res) => {
+        if (!res.poseLandmarks) return;
+        
+        // 自適應濾波：偵測到快速移動時增加 ALPHA
+        if (!smLM) smLM = res.poseLandmarks;
+        else {
+            smLM = smLM.map((lm, i) => ({
+                x: lm.x * (1 - ALPHA) + res.poseLandmarks[i].x * ALPHA,
+                y: lm.y * (1 - ALPHA) + res.poseLandmarks[i].y * ALPHA,
+                z: lm.z * (1 - ALPHA) + res.poseLandmarks[i].z * ALPHA
+            }));
+        }
+
+        ctx.clearRect(0, 0, cvs.width, cvs.height);
+        drawConnectors(ctx, smLM, POSE_CONNECTIONS, {color: '#ffffff11', lineWidth: 1});
+        drawLandmarks(ctx, smLM, {color: '#f59e0b', lineWidth: 1, radius: 2});
+
+        const lm = smLM;
+        if (stance === "UNKNOWN") {
+            stance = (lm[15].x < lm[16].x) ? "LHH" : "RHH";
+            sideTag.innerText = `模式：${stance === "RHH" ? "右打" : "左打"} | 精算模式已啟動`;
+        }
+
+        const isL = (stance === "LHH");
+        const rWrist = isL ? lm[15] : lm[16];
+        const rElbow = isL ? lm[13] : lm[14];
+        const rShoulder = isL ? lm[11] : lm[12];
+        const fShoulder = isL ? lm[12] : lm[11];
+        const fAnkle = isL ? lm[28] : lm[27];
+        const rHip = isL ? lm[23] : lm[24];
+        const fKnee = isL ? lm[26] : lm[25];
+        const rKnee = isL ? lm[25] : lm[26];
+
+        const rArmAngle = getA(rShoulder, rElbow, rWrist);
+        const trunkX = (lm[11].x + lm[12].x) / 2;
+
+        // --- 加嚴版機制與樣態邏輯 ---
+
+        // 階段 1: 著地瞬間 (M1 加嚴: 誤差容許從 50 下降到 30; S1 加嚴: 0.12 下降到 0.08)
+        if (!marks.heel && fAnkle.y > 0.82) {
+            marks.heel = true;
+            let s_m1 = calcStrict(rArmAngle, 90, 30, 12.5) + calcStrict(rShoulder.y, rElbow.y, 0.06, 12.5);
+            updateS('m1', s_m1);
+            updateS('s1', calcStrict(trunkX, (fKnee.x + rKnee.x)/2, 0.08, 7.5));
+        }
+
+        // 階段 2: 旋轉垂直 (M2 加嚴: 垂直容許 0.15 下降到 0.08; S2 加嚴: 斜率 0.1 下降到 0.06)
+        const vDist = Math.abs(rShoulder.x - rElbow.x);
+        if (!marks.v && vDist < 0.12 && marks.heel) {
+            marks.v = true;
+            updateS('m2', calcStrict(vDist, 0, 0.08, 25));
+            const sSlope = Math.abs(rShoulder.y - fShoulder.y);
+            const fSlope = Math.abs(rElbow.y - rWrist.y);
+            updateS('s2', calcStrict(sSlope, fSlope, 0.06, 7.5));
+        }
+
+        // 階段 3: 擊球瞬間 (S3 加嚴: 0.25 下降到 0.15; S4 加嚴: 0.18 下降到 0.12)
+        if (!marks.imp && Math.abs(rWrist.x - fShoulder.x) < 0.2 && marks.v) {
+            marks.imp = true;
+            updateS('m3', 20); // 滿足時空順序即給分
+            let lineDev = Math.abs(lm[0].x - rHip.x) + Math.abs(rHip.x - rKnee.x);
+            updateS('s3', calcStrict(lineDev, 0, 0.15, 7.5));
+            if (rWrist.y < rShoulder.y) updateS('s4', 7.5);
+            else updateS('s4', calcStrict(rWrist.y, rShoulder.y, 0.12, 7.5));
+        }
+
+        // 計算總分
+        const mSum = scores.m1 + scores.m2 + scores.m3;
+        const sSum = scores.s1 + scores.s2 + scores.s3 + scores.s4;
+        document.getElementById('sum-m').innerText = mSum.toFixed(1);
+        document.getElementById('sum-s').innerText = sSum.toFixed(1);
+        document.getElementById('total-score').innerText = Math.round(mSum + sSum);
+    });
+
+    function updateS(id, v) {
+        scores[id] = v;
+        const max = id.startsWith('m') ? (id==='m3'?20:25) : 7.5;
+        const elTxt = document.getElementById(`txt-${id}`);
+        const elBar = document.getElementById(`bar-${id}`);
+        const elCard = document.getElementById(`card-${id}`);
+        elTxt.innerText = `${v.toFixed(1)}/${max}`;
+        elBar.style.width = `${(v/max)*100}%`;
+        if (v/max > 0.9) elCard.classList.add('perfect');
+    }
+
+    document.getElementById('v-file').addEventListener('change', (e) => {
+        const file = e.target.files[0];
+        vid.src = URL.createObjectURL(file);
+        vid.onloadedmetadata = () => {
+            cvs.width = vid.videoWidth; cvs.height = vid.videoHeight;
+            reset(); vid.play();
+        };
+    });
+
+    function reset() {
+        stance = "UNKNOWN"; smLM = null;
+        scores = { m1:0, m2:0, m3:0, s1:0, s2:0, s3:0, s4:0 };
+        marks = { heel: false, v: false, imp: false };
+        document.querySelectorAll('.score-bar-fill').forEach(b => b.style.width = '0%');
+        document.querySelectorAll('.score-item').forEach(c => c.classList.remove('perfect'));
+    }
+
+    async function loop() {
+        if (!vid.paused && !vid.ended) {
+            await pose.send({image: vid});
+            requestAnimationFrame(loop);
+        }
+    }
+    vid.addEventListener('play', loop);
+</script>
+</body>
+</html>
