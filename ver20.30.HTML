@@ -1,0 +1,654 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+    <meta charset="UTF-8">
+    <title>阿公機制 20.30 - 二次觸地分離鎖定版</title>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/pose"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/drawing_utils"></script>
+    <style>
+        :root { --bg: #0f172a; --card: #1e293b; --accent: #38bdf8; --text: #f8fafc; --gold: #f59e0b; --danger: #ef4444; --success: #10b981; --heel: #4ade80; --toe: #facc15; }
+        body { font-family: 'PingFang TC', sans-serif; background: var(--bg); color: var(--text); margin: 0; padding: 10px; }
+        .container { max-width: 1100px; margin: 0 auto; display: grid; grid-template-columns: 1fr; gap: 15px; }
+        @media (min-width: 900px) { .container { grid-template-columns: 1.3fr 1fr; } }
+
+        .video-box { position: relative; background: #000; border-radius: 12px; border: 1px solid #334155; overflow: hidden; }
+        video { width: 100%; height: auto; display: block; }
+        canvas { position: absolute; top: 0; left: 0; width: 100%; height: 100%; pointer-events: none; z-index: 10; }
+        
+        .status-tag { position: absolute; top: 10px; left: 10px; background: rgba(0,0,0,0.85); padding: 6px 12px; border-radius: 4px; border-left: 4px solid var(--accent); color: #fff; font-size: 0.85rem; font-weight: bold; z-index: 20; }
+        .stance-badge { position: absolute; top: 10px; right: 10px; padding: 8px 16px; border-radius: 30px; font-weight: 900; font-size: 1rem; color: #fff; box-shadow: 0 4px 15px rgba(0,0,0,0.5); z-index: 20; display: none; transition: all 0.3s; }
+
+        .progress-overlay { position: absolute; bottom: 0; left: 0; width: 100%; height: 6px; background: #334155; display: none; z-index: 30; }
+        .progress-bar { height: 100%; background: var(--success); width: 0%; transition: width 0.1s linear; }
+
+        .dashboard { display: flex; flex-direction: column; gap: 8px; }
+        .hero-box { background: linear-gradient(135deg, #0f172a, #1e293b); border: 2px solid var(--gold); border-radius: 16px; padding: 15px; text-align: center; }
+        .total-score { font-size: 4rem; font-weight: 900; color: var(--gold); line-height: 1; }
+        .sub-score { font-size: 0.9rem; color: #94a3b8; display: flex; justify-content: center; gap: 15px; margin-top: 5px; }
+
+        .section-title { font-size: 0.85rem; color: #cbd5e1; margin-top: 10px; border-left: 3px solid var(--accent); padding-left: 8px; font-weight: bold; }
+        .score-row { background: var(--card); padding: 8px 12px; border-radius: 6px; margin-bottom: 4px; display: flex; justify-content: space-between; align-items: center; font-size: 0.85rem; }
+        .score-val { font-weight: bold; color: var(--accent); }
+        .debug-val { font-size: 0.8rem; color: #fbbf24; margin-left: 8px; font-weight: normal; }
+        .score-bar { height: 4px; background: #334155; border-radius: 2px; margin-top: 4px; overflow: hidden; }
+        .score-fill { height: 100%; background: var(--accent); width: 0%; transition: width 0.5s; }
+
+        .btn-group { display: flex; gap: 10px; margin-bottom: 10px; }
+        .btn { flex: 1; padding: 12px; border-radius: 8px; font-weight: 900; cursor: pointer; text-align: center; border: none; font-size: 1rem; transition: all 0.2s; }
+        .btn-upload { background: var(--accent); color: #000; }
+        .btn-start { background: #334155; color: #64748b; cursor: not-allowed; }
+        .btn-start.ready-lhh { background: #38bdf8; color: #000; animation: pulse 2s infinite; }
+        .btn-start.ready-rhh { background: #ef4444; color: #fff; animation: pulse 2s infinite; }
+    </style>
+</head>
+<body>
+
+<div class="container">
+    <div>
+        <div class="btn-group">
+            <label class="btn btn-upload" for="v-file">1. 載入影片</label>
+            <input type="file" id="v-file" accept="video/*" style="display:none">
+            <button id="btn-start" class="btn btn-start" disabled>2. 等待偵測...</button>
+        </div>
+        
+        <div class="video-box">
+            <video id="vid" playsinline muted loop></video>
+            <canvas id="cvs"></canvas>
+            <div id="status" class="status-tag">請先載入影片</div>
+            <div id="stance-badge" class="stance-badge">--</div>
+            <div id="prog-bg" class="progress-overlay"><div id="prog-bar" class="progress-bar"></div></div>
+        </div>
+    </div>
+
+    <div class="dashboard">
+        <div class="hero-box">
+            <div style="font-size: 0.8rem; color: #94a3b8;">阿公機制 20.30 總分</div>
+            <div class="total-score" id="final-score">0</div>
+            <div class="sub-score">
+                <span>時序: <span id="mech-score">0</span>/70</span>
+                <span>樣態: <span id="style-score">0</span>/30</span>
+            </div>
+        </div>
+
+        <div class="section-title">機制時序 (70分)</div>
+        <div id="mech-list"></div>
+
+        <div class="section-title">樣態指標 (30分)</div>
+        <div id="style-list"></div>
+    </div>
+</div>
+
+<script>
+const vid = document.getElementById('vid');
+const cvs = document.getElementById('cvs');
+const ctx = cvs.getContext('2d');
+const statusDiv = document.getElementById('status');
+const stanceBadge = document.getElementById('stance-badge');
+const btnStart = document.getElementById('btn-start');
+const progBg = document.getElementById('prog-bg');
+const progBar = document.getElementById('prog-bar');
+
+const MECH_ITEMS = [
+    {id: 'm1', name: '1. 球棒近身 (V型110-130)', max: 15},
+    {id: 'm2', name: '2. 手位高度 (肩-前腕)', max: 10},
+    {id: 'm3', name: '3. 穩定身軀 (前手) & 下盤', max: 15},
+    {id: 'm4', name: '4. 旋轉貼身 (垂直引導)', max: 10},
+    {id: 'm5', name: '5. 能量釋放 (髖旋轉)', max: 10},
+    {id: 'm6', name: '6. 延伸 (前手夾角)', max: 10}
+];
+const STYLE_ITEMS = [
+    {id: 's1', name: 'A. 著地瞬中軸', max: 7.5},
+    {id: 's2', name: 'B. 肩臂平行度', max: 7.5},
+    {id: 's3', name: 'C. 三點一線', max: 7.5},
+    {id: 's4', name: 'D. 揮擊延伸角度', max: 7.5}
+];
+
+function initList(arr, parentId) {
+    const p = document.getElementById(parentId);
+    p.innerHTML = '';
+    arr.forEach(i => {
+        p.innerHTML += `
+            <div style="margin-bottom:6px;">
+                <div class="score-row">
+                    <span>${i.name}<span id="debug-${i.id}" class="debug-val"></span></span>
+                    <span class="score-val" id="val-${i.id}">0/${i.max}</span>
+                </div>
+                <div class="score-bar"><div class="score-fill" id="bar-${i.id}"></div></div>
+            </div>`;
+    });
+}
+initList(MECH_ITEMS, 'mech-list');
+initList(STYLE_ITEMS, 'style-list');
+
+// 變數
+let appState = "IDLE"; 
+let detectedStance = "UNKNOWN"; 
+let lockedStance = "UNKNOWN";
+let scores = {}; 
+let IDX = null;
+
+// 雙軌地面 & 初始位置
+let FIXED_HEEL_Y = -1; 
+let FIXED_TOE_Y = -1;  
+let START_TOE_X = -1; 
+let START_SHOULDER_W = -1; 
+
+// 閾值
+const LAND_THRESHOLD = 0.05; 
+const HEEL_LIFT_THRESHOLD = 0.02; 
+const TOE_LIFT_THRESHOLD = 0.04; 
+
+// 狀態機
+let analysisState = 0; 
+// 0: Ready (Touch 1)
+// 1: Heel Lift (Potential No-Stride)
+// 2: Air (Stride / Leg Kick)
+// 3: Landed / Touch 2 (SEARCHING MAX SEPARATION)
+// 4: Planted (LOCKED)
+
+let timeToeLand = -1;
+let timeHeelPlant = -1;
+
+// 分離度紀錄
+let maxSeparationDist = 0; 
+let m1_final = 0; 
+let m2_final = 0; 
+
+let bestHeelData = null; 
+let bestExtensionData = null; 
+let frameDataList = []; 
+
+const pose = new Pose({ locateFile: (f) => `https://cdn.jsdelivr.net/npm/@mediapipe/pose/${f}` });
+pose.setOptions({ modelComplexity: 2, smoothLandmarks: true });
+
+function getDistance(p1, p2) {
+    return Math.sqrt(Math.pow(p1.x - p2.x, 2) + Math.pow(p1.y - p2.y, 2));
+}
+
+function getA_3D(p1, p2, p3) { 
+    const v1 = {x:p1.x-p2.x, y:p1.y-p2.y, z:p1.z-p2.z};
+    const v2 = {x:p3.x-p2.x, y:p3.y-p2.y, z:p3.z-p2.z};
+    const dot = v1.x*v2.x + v1.y*v2.y + v1.z*v2.z;
+    const mag1 = Math.sqrt(v1.x**2 + v1.y**2 + v1.z**2);
+    const mag2 = Math.sqrt(v2.x**2 + v2.y**2 + v2.z**2);
+    if(mag1*mag2===0) return 0;
+    return Math.acos(dot/(mag1*mag2))*(180/Math.PI);
+}
+function getSlopeAngle(p1, p2) {
+    const r = Math.atan2(p2.y-p1.y, p2.x-p1.x);
+    return r * 180 / Math.PI;
+}
+function calcProp(val, min, max, full, penaltyMax) {
+    if(val >= min && val <= max) return full;
+    let diff = 0;
+    if(val < min) diff = min - val;
+    else diff = val - max;
+    let tolerance = 20; 
+    let deduct = (diff / tolerance) * penaltyMax;
+    if (deduct > penaltyMax) deduct = penaltyMax;
+    return Math.max(0, full - deduct);
+}
+function drawText(ctx, text, x, y, color="#fbbf24") {
+    ctx.save();
+    ctx.font = "900 24px Arial"; 
+    ctx.fillStyle = color;
+    ctx.shadowColor = "black"; 
+    ctx.shadowBlur = 4;
+    ctx.lineWidth = 4;
+    ctx.strokeStyle = "rgba(0,0,0,0.9)";
+    ctx.strokeText(text, x * cvs.width, y * cvs.height);
+    ctx.fillText(text, x * cvs.width, y * cvs.height);
+    ctx.restore();
+}
+function getM2Angle(L) {
+    if (lockedStance === "RHH") {
+        let s = getSlopeAngle(L(12), L(15));
+        return Math.min(Math.abs(s), 180 - Math.abs(s));
+    } else {
+        let s = getSlopeAngle(L(11), L(16));
+        return Math.min(Math.abs(s), 180 - Math.abs(s));
+    }
+}
+
+pose.onResults(res => {
+    if(!res.poseLandmarks) return;
+    const smLM = res.poseLandmarks;
+    const worldLM = res.poseWorldLandmarks;
+    const L = (id) => smLM[id];
+    const W = (id) => worldLM[id];
+
+    ctx.clearRect(0,0,cvs.width,cvs.height);
+    drawConnectors(ctx, smLM, POSE_CONNECTIONS, {color:'#ffffff55', lineWidth:4}); 
+    drawLandmarks(ctx, smLM, {color:'#38bdf8', lineWidth:2, radius:4}); 
+
+    // --- 地面線 ---
+    if (appState === "ANALYSIS" && FIXED_HEEL_Y > 0) {
+        let hY = FIXED_HEEL_Y * cvs.height;
+        ctx.save(); ctx.beginPath(); ctx.strokeStyle = "#4ade80"; ctx.lineWidth = 4; ctx.setLineDash([15, 10]); 
+        ctx.moveTo(0, hY); ctx.lineTo(cvs.width, hY); ctx.stroke();
+        ctx.fillStyle = "#4ade80"; ctx.font = "bold 14px Arial"; ctx.fillText("Heel Line", 10, hY - 5); ctx.restore();
+
+        let tY = FIXED_TOE_Y * cvs.height;
+        ctx.save(); ctx.beginPath(); ctx.strokeStyle = "#facc15"; ctx.lineWidth = 2; ctx.setLineDash([5, 5]); 
+        ctx.moveTo(0, tY); ctx.lineTo(cvs.width, tY); ctx.stroke();
+        ctx.fillStyle = "#facc15"; ctx.font = "bold 14px Arial"; ctx.fillText("Toe Line", cvs.width - 70, tY - 5); ctx.restore();
+    }
+
+    // ★★★ 繪製手腳分離粉紅虛線 (只在 Phase 3: Touch 2 期間顯示) ★★★
+    if (appState === "ANALYSIS" && analysisState === 3) {
+        let wrist = lockedStance === "LHH" ? L(16) : L(15);
+        let toe = lockedStance === "LHH" ? L(32) : L(31);
+        if(wrist && toe) {
+            ctx.save();
+            ctx.beginPath();
+            ctx.strokeStyle = "#ec4899"; // Pink
+            ctx.lineWidth = 6;
+            ctx.setLineDash([10, 5]);
+            ctx.moveTo(wrist.x * cvs.width, wrist.y * cvs.height);
+            ctx.lineTo(toe.x * cvs.width, toe.y * cvs.height);
+            ctx.stroke();
+            // 標示 "Separation"
+            ctx.fillStyle = "#ec4899";
+            ctx.font = "bold 16px Arial";
+            let midX = (wrist.x + toe.x) / 2 * cvs.width;
+            let midY = (wrist.y + toe.y) / 2 * cvs.height;
+            ctx.fillText("Separation", midX, midY);
+            ctx.restore();
+        }
+    }
+
+    // 1. 預覽
+    if (appState === "PREVIEW") {
+        const noseX = L(0).x;
+        const midEarX = (L(7).x + L(8).x) / 2;
+        let newStance = detectedStance;
+        if (noseX > midEarX + 0.02) newStance = "RHH";
+        else if (noseX < midEarX - 0.02) newStance = "LHH";
+
+        if (newStance !== "UNKNOWN" && newStance !== detectedStance) {
+            detectedStance = newStance;
+            stanceBadge.style.display = "block";
+            if (detectedStance === "LHH") {
+                stanceBadge.innerText = "偵測：左打 (LHH)";
+                stanceBadge.style.backgroundColor = "#38bdf8"; 
+                btnStart.className = "btn btn-start ready-lhh";
+                btnStart.innerText = "▶ 確認左打，開始分析";
+            } else {
+                stanceBadge.innerText = "偵測：右打 (RHH)";
+                stanceBadge.style.backgroundColor = "#ef4444"; 
+                btnStart.className = "btn btn-start ready-rhh";
+                btnStart.innerText = "▶ 確認右打，開始分析";
+            }
+            btnStart.disabled = false;
+        }
+    }
+
+    // 2. 分析
+    if (appState === "ANALYSIS") {
+        const currentTime = vid.currentTime;
+
+        // 初始化
+        if (analysisState === 0 && !hasAnalysisStarted) {
+            hasAnalysisStarted = true;
+            FIXED_HEEL_Y = Math.max(L(29).y, L(30).y);
+            FIXED_TOE_Y = Math.max(L(31).y, L(32).y);
+            START_TOE_X = L(IDX.leadToe).x; 
+            START_SHOULDER_W = Math.sqrt((L(11).x-L(12).x)**2 + (L(11).y-L(12).y)**2);
+            maxSeparationDist = 0;
+        }
+
+        let frameSnapshot = { t: currentTime, body: {} };
+        [11, 12, 15, 16].forEach(i => frameSnapshot.body[i] = {x: L(i).x, y: L(i).y});
+        frameSnapshot.shoulderDist = Math.sqrt((L(11).x-L(12).x)**2 + (L(11).y-L(12).y)**2);
+        frameDataList.push(frameSnapshot);
+
+        const currentToeY = L(IDX.leadToe).y;
+        const currentHeelY = L(IDX.leadHeel).y;
+        const currentToeX = L(IDX.leadToe).x;
+
+        // --- 狀態機 ---
+        let xDist = Math.abs(currentToeX - START_TOE_X);
+        let toeLift = FIXED_TOE_Y - currentToeY;
+        let heelLift = FIXED_HEEL_Y - currentHeelY;
+
+        // 1. Ready (Touch 1) -> Wait for Action
+        if (analysisState === 0) {
+            if (toeLift > TOE_LIFT_THRESHOLD || xDist > START_SHOULDER_W * 0.1) {
+                analysisState = 2; // Stride (Air)
+            } else if (heelLift > HEEL_LIFT_THRESHOLD) {
+                analysisState = 1; // Heel Lift (Potential No-Stride)
+            }
+        } 
+        // 2. Heel Lift -> Check for real stride or land
+        else if (analysisState === 1) {
+            if (toeLift > TOE_LIFT_THRESHOLD || xDist > START_SHOULDER_W * 0.1) {
+                analysisState = 2; // Promotion to Stride
+            } else if (heelLift < LAND_THRESHOLD) {
+                // 不跨步模式的 Touch 2 (Heel Down)
+                startSearchPhase(currentTime);
+            }
+        }
+        // 3. Stride (Air) -> Check for Land (Touch 2)
+        else if (analysisState === 2) {
+            if (toeLift < LAND_THRESHOLD) {
+                // 跨步模式的 Touch 2 (Toe Down)
+                startSearchPhase(currentTime);
+            }
+        }
+        // 4. Searching Max Stretch (Touch 2 -> Heel Plant)
+        else if (analysisState === 3) {
+            // ★★★ 只有在這階段才計算最大分離度 ★★★
+            let currentDist = 0;
+            if (lockedStance === "LHH") currentDist = getDistance(L(16), L(32));
+            else currentDist = getDistance(L(15), L(31));
+
+            // 更新極大值
+            if (currentDist > maxSeparationDist) {
+                maxSeparationDist = currentDist;
+                
+                m1_final = getA_3D(W(IDX.leadShoulder), W(IDX.leadElbow), W(IDX.leadWrist));
+                m2_final = getM2Angle(L);
+                
+                scores.m1 = calcProp(m1_final, 110, 130, 15, 15);
+                scores.m2 = calcProp(m2_final, 0, 20, 10, 10);
+                
+                document.getElementById('debug-m1').innerText = `[最大拉伸: ${Math.round(m1_final)}°]`;
+                document.getElementById('debug-m2').innerText = `[最大拉伸: ${Math.round(m2_final)}°]`;
+            }
+
+            // 檢查是否踩死 (End Search)
+            // Stride模式看 Heel Plant, No-Stride模式可能已經在地上, 這裡簡單用 Heel Plant 判定
+            if (heelLift < LAND_THRESHOLD) {
+                // 防止瞬間跳動，確認是持續踩地
+                // 這裡簡化：只要判定為踩死就結束
+                finishAnalysisPhase(currentTime);
+            }
+        }
+
+        function startSearchPhase(t) {
+            analysisState = 3;
+            timeToeLand = t;
+            maxSeparationDist = 0; // 重置，準備記錄 Touch 2 的最大值
+        }
+
+        function finishAnalysisPhase(t) {
+            analysisState = 4; // Locked
+            timeHeelPlant = t;
+            bestHeelData = {
+                angFront: getA_3D(W(IDX.leadHip), W(IDX.leadKnee), W(IDX.leadAnkle)),
+                angBack: getA_3D(W(IDX.backHip), W(IDX.backKnee), W(IDX.backAnkle)),
+                trunkX: (L(11).x + L(12).x)/2,
+                legMidX: (L(IDX.leadKnee).x + L(IDX.backKnee).x)/2,
+                t: t
+            };
+        }
+
+        // 延伸 & 更新
+        const handX = L(IDX.leadWrist).x;
+        let isNewBestExt = false;
+        if (lockedStance === "LHH") {
+            if (handX < maxHandExt) { maxHandExt = handX; isNewBestExt = true; }
+        } else {
+            if (handX > maxHandExt) { maxHandExt = handX; isNewBestExt = true; }
+        }
+        if (isNewBestExt) {
+            bestExtensionData = {
+                angM6: getA_3D(W(IDX.leadWrist), W(IDX.leadElbow), W(IDX.leadShoulder)),
+            };
+        }
+
+        const dist4 = Math.abs(L(IDX.backShoulder).x - L(IDX.backElbow).x);
+        const scoreM4 = calcProp(dist4, 0, 0.1, 10, 10);
+        if (scoreM4 > scores.m4) scores.m4 = scoreM4;
+
+        let hipOK = false;
+        if(lockedStance === "LHH") hipOK = L(IDX.backHip).x < L(IDX.leadHip).x; 
+        else hipOK = L(IDX.backHip).x > L(IDX.leadHip).x;
+        if (hipOK) scores.m5 = 10;
+
+        const sSlope = Math.abs(L(11).y - L(12).y);
+        const armSlope = Math.abs(L(IDX.backElbow).y - L(IDX.backWrist).y);
+        const scoreS2 = calcProp(Math.abs(sSlope-armSlope), 0, 0.1, 7.5, 7.5);
+        if (scoreS2 > scores.s2) scores.s2 = scoreS2;
+
+        const lineDev = Math.abs(L(0).x - L(IDX.backHip).x) + Math.abs(L(IDX.backHip).x - L(IDX.backKnee).x);
+        const scoreS3 = calcProp(lineDev, 0, 0.15, 7.5, 7.5);
+        if (scoreS3 > scores.s3) scores.s3 = scoreS3;
+
+        // ========= HUD =========
+        let stateText = "READY (TOUCH 1)";
+        let stateColor = "#94a3b8";
+        if (analysisState === 1) { stateText = "LOADING"; stateColor = "#a7f3d0"; }
+        if (analysisState === 2) { stateText = "AIR (STRIDE)"; stateColor = "#facc15"; }
+        if (analysisState === 3) { stateText = "TOUCH 2 (SEARCHING)"; stateColor = "#ec4899"; }
+        if (analysisState === 4) { stateText = "PLANTED (LOCKED)"; stateColor = "#10b981"; }
+
+        if (analysisState < 3) {
+            drawText(ctx, stateText, 0.05, 0.95, stateColor);
+            let rtM1 = getA_3D(W(IDX.leadShoulder), W(IDX.leadElbow), W(IDX.leadWrist));
+            let rtM2 = getM2Angle(L);
+            drawText(ctx, `M1:${Math.round(rtM1)}°`, L(IDX.leadElbow).x, L(IDX.leadElbow).y - 0.05);
+            drawText(ctx, `M2:${Math.round(rtM2)}°`, L(IDX.backShoulder).x, L(IDX.backShoulder).y - 0.05, "#a7f3d0");
+        } 
+        else if (analysisState === 3) {
+            drawText(ctx, stateText, 0.05, 0.95, stateColor);
+            drawText(ctx, `M1:${Math.round(m1_final)}° (Max)`, L(IDX.leadElbow).x, L(IDX.leadElbow).y - 0.05, "#ec4899");
+            drawText(ctx, `M2:${Math.round(m2_final)}° (Max)`, L(IDX.backShoulder).x, L(IDX.backShoulder).y - 0.05, "#ec4899");
+            
+            if (frameDataList.length > 0) {
+                let targetWrist = lockedStance === "LHH" ? 16 : 15;
+                drawText(ctx, `M3 Analyzing...`, L(targetWrist).x, L(targetWrist).y + 0.05, "#fcd34d");
+            }
+        }
+        else { 
+            drawText(ctx, stateText, 0.05, 0.95, stateColor);
+            drawText(ctx, `M1:${Math.round(m1_final)}° (Lock)`, L(IDX.leadElbow).x, L(IDX.leadElbow).y - 0.05, "#ec4899");
+            drawText(ctx, `M2:${Math.round(m2_final)}° (Lock)`, L(IDX.backShoulder).x, L(IDX.backShoulder).y - 0.05, "#ec4899");
+
+            const curKneeFront = getA_3D(W(IDX.leadHip), W(IDX.leadKnee), W(IDX.leadAnkle));
+            const curKneeBack = getA_3D(W(IDX.backHip), W(IDX.backKnee), W(IDX.backAnkle));
+            drawText(ctx, `${Math.round(curKneeFront)}°`, L(IDX.leadKnee).x, L(IDX.leadKnee).y + 0.05, "#fcd34d");
+            drawText(ctx, `${Math.round(curKneeBack)}°`, L(IDX.backKnee).x, L(IDX.backKnee).y + 0.05, "#fcd34d");
+
+            const curM6 = getA_3D(W(IDX.leadWrist), W(IDX.leadElbow), W(IDX.leadShoulder));
+            if (curM6 > 130) { 
+                drawText(ctx, `M6:${Math.round(curM6)}°`, L(IDX.leadWrist).x, L(IDX.leadWrist).y - 0.1, "#60a5fa");
+            }
+        }
+
+        stepFrame();
+    }
+});
+
+function calculateFinalScores() {
+    if (analysisState === 4 && bestHeelData && timeToeLand > 0) {
+        
+        let startFrame = frameDataList.find(f => Math.abs(f.t - timeToeLand) < 0.05);
+        if (!startFrame) startFrame = frameDataList[0]; 
+
+        let baseShoulderWidth = startFrame.shoulderDist;
+        let limitDist = baseShoulderWidth * 0.45; 
+        let targetWrist = lockedStance === "LHH" ? 16 : 15;
+
+        let maxIntervalDisp = 0;
+        frameDataList.forEach(f => {
+            if (f.t >= timeToeLand && f.t <= timeHeelPlant) {
+                let dx = Math.abs(f.body[targetWrist].x - startFrame.body[targetWrist].x);
+                if (dx > maxIntervalDisp) maxIntervalDisp = dx;
+            }
+        });
+
+        let scoreDisp = 5;
+        if (maxIntervalDisp > limitDist) {
+            let over = maxIntervalDisp - limitDist;
+            if (over > 0) {
+                let p = over / (baseShoulderWidth * 0.20); 
+                let deduction = 5 * p;
+                if (deduction > 5) deduction = 5;
+                scoreDisp = 5 - deduction;
+            }
+        }
+
+        const af = bestHeelData.angFront;
+        const ab = bestHeelData.angBack;
+        const c1 = (af>=160 && af<=175) && (ab>=160 && ab<=175);
+        const c2 = (af>=170 && af<=179) && (ab>=158 && ab<=170);
+        let scoreLeg = 0;
+        if(c1 || c2) scoreLeg = 10;
+        else {
+            let diff = Math.abs(af-167) + Math.abs(ab-167);
+            scoreLeg = calcProp(diff, 0, 20, 10, 10);
+        }
+        
+        scores.m3 = scoreDisp + scoreLeg;
+
+        let percent = (maxIntervalDisp / baseShoulderWidth) * 100;
+        document.getElementById('debug-m3').innerText = `[手:${percent.toFixed(1)}% | 腿:前${Math.round(af)}° 後${Math.round(ab)}°]`;
+
+        scores.s1 = calcProp(Math.abs(bestHeelData.trunkX - bestHeelData.legMidX), 0, 0.05, 7.5, 7.5);
+    } else {
+        document.getElementById('debug-m3').innerText = `[動作不完整]`;
+    }
+
+    if (bestExtensionData) {
+        const rawM6 = bestExtensionData.angM6;
+        scores.m6 = calcProp(rawM6, 160, 190, 10, 10);
+        document.getElementById('debug-m6').innerText = `[實測: ${Math.round(rawM6)}°]`;
+        scores.s4 = scores.m6 * 0.75;
+    }
+
+    updateUI();
+}
+
+function stepFrame() {
+    if (vid.currentTime < vid.duration) {
+        const pct = (vid.currentTime / vid.duration) * 100;
+        progBar.style.width = pct + "%";
+        vid.currentTime += 0.033;
+    } else {
+        appState = "DONE";
+        statusDiv.innerText = "分析完成 (100%)";
+        progBar.style.width = "100%";
+        calculateFinalScores();
+        btnStart.disabled = false;
+        btnStart.className = "btn btn-upload"; 
+        btnStart.innerText = "分析結束";
+    }
+}
+
+vid.onseeked = async () => {
+    if (appState === "ANALYSIS") {
+        await pose.send({image: vid});
+    }
+};
+
+function updateUI() {
+    let mTotal = 0, sTotal = 0;
+    MECH_ITEMS.forEach(i => {
+        let v = scores[i.id] || 0;
+        mTotal += v;
+        document.getElementById(`val-${i.id}`).innerText = v.toFixed(1) + "/" + i.max;
+        document.getElementById(`bar-${i.id}`).style.width = (v/i.max*100) + "%";
+    });
+    STYLE_ITEMS.forEach(i => {
+        let v = scores[i.id] || 0;
+        sTotal += v;
+        document.getElementById(`val-${i.id}`).innerText = v.toFixed(1) + "/" + i.max;
+        document.getElementById(`bar-${i.id}`).style.width = (v/i.max*100) + "%";
+    });
+    document.getElementById('mech-score').innerText = mTotal.toFixed(0);
+    document.getElementById('style-score').innerText = sTotal.toFixed(0);
+    document.getElementById('final-score').innerText = (mTotal + sTotal).toFixed(0);
+}
+
+document.getElementById('v-file').onchange = (e) => {
+    const f = e.target.files[0];
+    if(!f) return;
+    
+    vid.src = URL.createObjectURL(f);
+    vid.onloadedmetadata = () => {
+        cvs.width = vid.videoWidth;
+        cvs.height = vid.videoHeight;
+        
+        appState = "PREVIEW";
+        detectedStance = "UNKNOWN";
+        btnStart.disabled = true;
+        btnStart.className = "btn btn-start";
+        btnStart.innerText = "2. 等待面相偵測...";
+        stanceBadge.style.display = 'none';
+        progBg.style.display = 'none';
+        
+        document.querySelectorAll('.debug-val').forEach(el => el.innerText = '');
+        
+        MECH_ITEMS.concat(STYLE_ITEMS).forEach(i => scores[i.id] = 0);
+        updateUI();
+        
+        FIXED_HEEL_Y = -1; FIXED_TOE_Y = -1;
+        hasAnalysisStarted = false; analysisState = 0;
+        maxSeparationDist = 0;
+
+        vid.play();
+        requestAnimationFrame(previewLoop);
+    };
+};
+
+async function previewLoop() {
+    if (appState === "PREVIEW" && !vid.paused) {
+        await pose.send({image: vid});
+        requestAnimationFrame(previewLoop);
+    }
+}
+
+btnStart.onclick = () => {
+    if (appState === "PREVIEW" && detectedStance !== "UNKNOWN") {
+        appState = "ANALYSIS";
+        lockedStance = detectedStance;
+        
+        if (lockedStance === "LHH") {
+            IDX = {
+                leadWrist: 16, leadElbow: 14, leadShoulder: 12,
+                backWrist: 15, backElbow: 13, backShoulder: 11,
+                leadToe: 32, leadHeel: 30, 
+                leadKnee: 26, leadHip: 24, leadAnkle: 28,
+                backKnee: 25, backHip: 23, backAnkle: 27
+            };
+            maxHandExt = 1.0; 
+        } else {
+            IDX = {
+                leadWrist: 15, leadElbow: 13, leadShoulder: 11,
+                backWrist: 16, backElbow: 14, backShoulder: 12,
+                leadToe: 31, leadHeel: 29, 
+                leadKnee: 25, leadHip: 23, leadAnkle: 27,
+                backKnee: 26, backHip: 24, backAnkle: 28
+            };
+            maxHandExt = 0.0;
+        }
+
+        vid.pause();
+        vid.currentTime = 0;
+        
+        scores = {}; MECH_ITEMS.concat(STYLE_ITEMS).forEach(i => scores[i.id] = 0);
+        scores.maxBodyDisp = 0;
+        scores.m4 = 0; scores.m5 = 0; scores.s2 = 0; scores.s3 = 0;
+        
+        document.querySelectorAll('.debug-val').forEach(el => el.innerText = '');
+        
+        bestToeData = null; bestHeelData = null; bestExtensionData = null;
+        maxToeY = -1; maxHeelY = -1;
+        frameToeLand = -1; frameHeelLand = -1;
+        frameDataList = [];
+        
+        FIXED_HEEL_Y = -1; FIXED_TOE_Y = -1;
+        hasAnalysisStarted = false; analysisState = 0;
+        maxSeparationDist = 0;
+        
+        progBg.style.display = 'block';
+        btnStart.disabled = true;
+        btnStart.className = "btn btn-start";
+        btnStart.innerText = "分析中 (請勿切換)";
+        statusDiv.innerText = "逐幀掃描中... 0%";
+    }
+};
+</script>
+</body>
+</html>
